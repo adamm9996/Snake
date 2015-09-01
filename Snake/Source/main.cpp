@@ -31,6 +31,8 @@ void updateDisplay();
 void drawSquare(int, int);
 void drawSnake();
 void drawTitle();
+void drawGameOver();
+void drawArrow(int, int);
 void debugShaders(GLint, GLint);
 
 struct Coord
@@ -45,19 +47,21 @@ enum Direction
 
 Coord goal;
 list<Coord> snake;
-bool running = true, alive = false, inMenu = true;
+bool running = true, alive = false, inMenu = true, paused = false;
+std::chrono::system_clock::time_point frameStart;
 Direction dir = UP;
-int score = 0;
+int score = 0, arrowHeight = 300, speedIndex = 0;
 SDL_Window* window;
 SDL_GLContext glContext;
 GLuint vbo, vao, ebo, tex, vertexShader, fragmentShader, shaderProgram, posAttrib, colAttrib, texAttrib;
 GLuint textures[2];
 GLint uniSquareTrans;
 unsigned char* image;
-glm::mat4 squareTrans;
-const int WIDTH = 600, HEIGHT = 600, SQUARE_COUNT = 60, FPS = 30, WAIT_TIME_MILLIS = 1000 / FPS, START_X = 1, START_Y = 1;
+glm::mat4 squareTrans, arrowTrans;
+const int WIDTH = 600, HEIGHT = 600, SQUARE_COUNT = 60, START_X = 1, START_Y = 1, GROWTH_ON_POINT = 5;
 const float SQUARE_SIZE = (2.0f / SQUARE_COUNT);
 float white[] = {1.0f, 1.0f, 1.0f};
+int frameRate[] = {40, 30, 20}; //possible frame rates. element 0 = easy difficulty, 1 = medium, 2 = hard
 const string TITLE = "Snake";
 GLfloat squareVertices[] =
 {
@@ -110,9 +114,9 @@ int main()
 
 	while (running)
 	{
-		drawTitle();
 		while (inMenu)
 		{
+			drawTitle();
 			takeInput();
 		}
 
@@ -120,11 +124,15 @@ int main()
 
 		while(alive)
 		{
-			takeInput();
+			frameStart = std::chrono::system_clock::now();
+			do
+				takeInput();
+			while (paused && running);
 			updateGame();
 			updateDisplay();
-			std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TIME_MILLIS));
+			std::this_thread::sleep_until(frameStart + std::chrono::milliseconds(frameRate[speedIndex]));
 		}
+
 	}
 
 	destroyDisplay();
@@ -151,24 +159,41 @@ void takeInput()
 			switch(windowEvent.key.keysym.sym)
 			{
 			case SDLK_UP:
-				if (dir != DOWN)
+				if (dir != DOWN && !paused)
 					dir = UP;
+
+				if (inMenu)
+				{
+					speedIndex = ((speedIndex + 2) % 3);
+				}
 			break;
 			case SDLK_LEFT:
-				if (dir != RIGHT)
+				if (dir != RIGHT && !paused)
 					dir = LEFT;
 			break;
 			case SDLK_DOWN:
-				if (dir != UP)
+				if (dir != UP && !paused)
 					dir = DOWN;
+
+				if (inMenu)
+				{
+					speedIndex = ((speedIndex + 1) % 3);
+				}
 			break;
 			case SDLK_RIGHT:
-				if (dir != LEFT)
+				if (dir != LEFT && !paused)
 					dir = RIGHT;
 			break;
 			case SDLK_RETURN:
-				inMenu = false;
-				alive = true;
+				if (inMenu)
+				{
+					inMenu = false;
+					alive = true;
+				}
+				else
+				{
+					paused = !paused;
+				}
 			break;
 			}
 		}
@@ -177,10 +202,11 @@ void takeInput()
 
 void gameOver()
 {
-	std::cout << "GAME OVER" << std::endl;
-	std::cout << "FINAL SCORE: " << score << std::endl;
 	alive = false;
+	drawGameOver();
+	std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 	inMenu = true;
+	SDL_SetWindowTitle(window, "Snake");
 }
 
 void updateGame()
@@ -198,9 +224,39 @@ void updateGame()
 		SDL_SetWindowTitle(window, oss.str().c_str());
 
 		Coord newSeg;
-		newSeg.x = snake.back().x - 1;
-		newSeg.y = snake.back().y - 1;
-		snake.push_back(newSeg);
+		if (snake.size() == 1)
+		{
+			switch (dir)
+			{
+			case UP:
+				newSeg.x = snake.back().x;
+				newSeg.y = snake.back().y - 1;
+			break;
+			case LEFT:
+				newSeg.x = snake.back().x + 1;
+				newSeg.y = snake.back().y;
+			break;
+			case DOWN:
+				newSeg.x = snake.back().x;
+				newSeg.y = snake.back().y + 1;
+			break;
+			case RIGHT:
+				newSeg.x = snake.back().x - 1;
+				newSeg.y = snake.back().y;
+			break;
+			}
+		}
+		else
+		{
+			newSeg.x = snake.back().x;
+			newSeg.y = snake.back().y;
+
+		}
+
+		for (int t = 0; t < GROWTH_ON_POINT; t++)
+		{
+			snake.push_back(newSeg);
+		}
 
 		goal.x = rand() % 59 + 1;
 		goal.y = rand() % 59 + 1;
@@ -258,16 +314,44 @@ void drawTitle()
 	glUniformMatrix4fv(uniSquareTrans, 1, GL_FALSE, glm::value_ptr(squareTrans));
 	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
+	drawArrow(24, 32 - 3 * speedIndex);
+
+	SDL_GL_SwapWindow(window);
+}
+
+void drawGameOver()
+{
+	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	squareTrans = glm::mat4();
+	glUniform1i(glGetUniformLocation(shaderProgram, "tex"), 2);
+	squareTrans = glm::scale(squareTrans, glm::vec3(1.0f, 1.0f, 1.0f));
+	glUniformMatrix4fv(uniSquareTrans, 1, GL_FALSE, glm::value_ptr(squareTrans));
+	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
 	SDL_GL_SwapWindow(window);
 }
 
 void drawSquare(int x, int y)
 {
 	squareTrans = glm::mat4();
-	squareTrans = glm::translate(squareTrans, glm::vec3(SQUARE_SIZE * x - 1.0f + SQUARE_SIZE * 0.5f, SQUARE_SIZE * y - 1.0f + SQUARE_SIZE * 0.5f, 0.0f));
+	squareTrans = glm::translate(squareTrans, glm::vec3(SQUARE_SIZE * (x + 0.5f) - 1.0f, SQUARE_SIZE * (y + 0.5f) - 1.0f, 0.0f));
 	squareTrans = glm::scale(squareTrans, SQUARE_SIZE * glm::vec3(1.0f, 1.0f, 1.0f));
 	glUniformMatrix4fv(uniSquareTrans, 1, GL_FALSE, glm::value_ptr(squareTrans));
 	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+}
+
+void drawArrow(int x, int y)
+{
+	glUniform1i(glGetUniformLocation(shaderProgram, "tex"), 1);
+
+	arrowTrans = glm::mat4();
+	arrowTrans = glm::translate(arrowTrans, glm::vec3(SQUARE_SIZE * (x + 0.5f) - 1.0f, SQUARE_SIZE * (y + 0.5f) - 1.0f, 0.0f));
+	arrowTrans = glm::scale(arrowTrans, SQUARE_SIZE * glm::vec3(1.0f, 1.0f, 1.0f));
+	arrowTrans = glm::rotate(arrowTrans, 225.0f, glm::vec3(0.0f, 0.0f, 1.0f));
+	glUniformMatrix4fv(uniSquareTrans, 1, GL_FALSE, glm::value_ptr(arrowTrans));
+	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, 0);
 }
 
 void initialiseGame()
@@ -283,7 +367,7 @@ void initialiseGame()
 	goal.y = rand() % 60;
 	dir = UP;
 
-	SDL_SetWindowTitle(window, "Snake");
+	SDL_SetWindowTitle(window, "Snake - Score: 0");
 	score = 0;
 
 	glUniform1i(glGetUniformLocation(shaderProgram, "tex"), 1);
@@ -361,7 +445,7 @@ void initialiseGL()
 	glLinkProgram(shaderProgram);
 	glUseProgram(shaderProgram);
 
-	glGenTextures(2, textures);
+	glGenTextures(3, textures);
 
 	int width, height;
 	unsigned char* image;
@@ -379,6 +463,15 @@ void initialiseGL()
 	glBindTexture(GL_TEXTURE_2D, textures[1]);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB, GL_FLOAT, white);
 	glUniform1i(glGetUniformLocation(shaderProgram, "tex"), 1);
+
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+	glActiveTexture(GL_TEXTURE2);
+	glBindTexture(GL_TEXTURE_2D, textures[2]);
+	image = SOIL_load_image("gameOver.png", &width, &height, 0, SOIL_LOAD_RGB);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, image);
+	glUniform1i(glGetUniformLocation(shaderProgram, "tex"), 2);
 
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
